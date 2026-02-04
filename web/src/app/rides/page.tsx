@@ -29,10 +29,9 @@ export default function RidesPage() {
     if (!uid) return;
 
     const q = query(
-      collection(db, "rides"),
-      where("uid", "==", uid),
-      orderBy("createdAt", "desc")
-    );
+  collection(db, "rides"),
+  where("uid", "==", uid)
+);
 
     const unsub = onSnapshot(q, (snap) => {
       setRides(
