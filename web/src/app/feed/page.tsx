@@ -24,3 +24,5 @@ export default function FeedPage() {
     </main>
   );
 }
+
+<a href="/rides">My Ride Plans</a>

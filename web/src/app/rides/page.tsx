@@ -85,4 +85,8 @@ export default function RidesPage() {
       )}
     </main>
   );
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> be82b89 (Add create ride plan page)
