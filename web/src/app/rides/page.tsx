@@ -27,16 +27,22 @@ export default function RidesPage() {
 
   useEffect(() => {
     if (!uid) return;
-    const q = query(collection(db, "rides"), where("uid", "==", uid));
-    const unsub = onSnapshot(
-  q,
-  (snap) => {
-    setRides(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
-  },
-  (error) => {
-    console.error("Firestore error:", error);
-  }
-);
+
+    const q = query(
+      collection(db, "rides"),
+      where("uid", "==", uid),
+      orderBy("createdAt", "desc")
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      setRides(
+        snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }))
+      );
+    });
+
     return () => unsub();
   }, [uid]);
 
@@ -44,7 +50,9 @@ export default function RidesPage() {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
         <h1>My Rides</h1>
-        <p>Please <a href="/login">login</a>.</p>
+        <p>
+          Please <a href="/login">login</a>.
+        </p>
       </main>
     );
   }
@@ -59,7 +67,9 @@ export default function RidesPage() {
       </div>
 
       {rides.length === 0 ? (
-        <p>No rides yet. <a href="/rides/new">Create your first ride plan</a>.</p>
+        <p>
+          No rides yet. <a href="/rides/new">Create your first ride plan</a>.
+        </p>
       ) : (
         <div style={{ display: "grid", gap: 12 }}>
           {rides.map((x) => (
@@ -75,9 +85,11 @@ export default function RidesPage() {
               }}
             >
               <strong>{x.title}</strong>
-              <div>{x.start} → {x.end}</div>
+              <div>
+                {x.start} → {x.end}
+              </div>
               <div style={{ opacity: 0.8, fontSize: 13 }}>
-                {x.transport.toUpperCase()} • {x.budget.toUpperCase()} • {x.status.toUpperCase()}
+                {(x.transport || "").toUpperCase()} • {(x.budget || "").toUpperCase()} • {(x.status || "").toUpperCase()}
               </div>
             </a>
           ))}
@@ -85,8 +97,4 @@ export default function RidesPage() {
       )}
     </main>
   );
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> be82b89 (Add create ride plan page)
