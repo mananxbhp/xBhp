@@ -1,5 +1,15 @@
 "use client";
-
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  addDoc,
+  collection,
+  serverTimestamp,
+  query,
+  orderBy,
+} from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -15,7 +25,20 @@ import {
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebaseClient";
 import { useParams, useRouter } from "next/navigation";
+type ContentItem = {
+  id: string;
+  uid: string;
+  kind: "photo" | "video" | "blog";
+  title: string;
+  caption?: string;
+  url?: string;
+  body?: string;
+  createdAt?: any;
+  updatedAt?: any;
+};
 
+const [content, setContent] = useState<ContentItem[]>([]);
+const [contentErr, setContentErr] = useState<string | null>(null);
 type Ride = {
   uid: string;
   title: string;
@@ -114,7 +137,30 @@ const [cBody, setCBody] = useState("");
         setErr(e?.message ?? "Failed to load ride");
       }
     );
+useEffect(() => {
+  if (!uid || !id) return;
 
+  const q = query(
+    collection(db, "rides", String(id), "content"),
+    orderBy("createdAt", "desc")
+  );
+
+  const unsub = onSnapshot(
+    q,
+    (snap) => {
+      setContent(
+        snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }))
+      );
+      setContentErr(null);
+    },
+    (e) => setContentErr(e?.message ?? "Failed to load content")
+  );
+
+  return () => unsub();
+}, [uid, id]);
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, id, isEditing]);
@@ -171,33 +217,37 @@ function startEditContent(x: ContentItem) {
 }
 
 async function saveContent() {
-  if (!uid || !id) return;
+  try {
+    if (!uid || !id) return;
 
-  if (!cTitle.trim()) return setContentErr("Title is required.");
-  if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
-    return setContentErr("URL is required for Photo/Video.");
+    if (!cTitle.trim()) return setContentErr("Title is required.");
+    if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
+      return setContentErr("URL is required for Photo/Video.");
 
-  setContentErr(null);
+    setContentErr(null);
 
-  const payload: any = {
-    uid,
-    kind: cKind,
-    title: cTitle.trim(),
-    caption: cCaption.trim(),
-    updatedAt: serverTimestamp(),
-  };
+    const payload: any = {
+      uid,
+      kind: cKind,
+      title: cTitle.trim(),
+      caption: cCaption.trim(),
+      updatedAt: serverTimestamp(),
+    };
 
-  if (cKind === "blog") payload.body = cBody || "";
-  else payload.url = cUrl.trim();
+    if (cKind === "blog") payload.body = cBody || "";
+    else payload.url = cUrl.trim();
 
-  if (editing) {
-    await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
-  } else {
-    payload.createdAt = serverTimestamp();
-    await addDoc(collection(db, "rides", String(id), "content"), payload);
+    if (editing) {
+      await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
+    } else {
+      payload.createdAt = serverTimestamp();
+      await addDoc(collection(db, "rides", String(id), "content"), payload);
+    }
+
+    resetContentForm();
+  } catch (e: any) {
+    setContentErr(e?.message ?? "Failed to save content");
   }
-
-  resetContentForm();
 }
 
 async function deleteContent(x: ContentItem) {
