@@ -166,8 +166,4 @@ export default function NewRidePage() {
       </form>
     </main>
   );
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 3294f60 (Fix merge conflict markers in rides/new page)
