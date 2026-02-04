@@ -1,15 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "@/lib/firebaseClient";
 import {
-  deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   updateDoc,
+  arrayUnion,
+  serverTimestamp,
 } from "firebase/firestore";
+import { auth, db } from "@/lib/firebaseClient";
+import { useParams, useRouter } from "next/navigation";
+
+type RideUpdate = {
+  at?: any; // Firestore timestamp
+  text: string;
+};
 
 type Ride = {
   uid: string;
@@ -17,118 +24,196 @@ type Ride = {
   start: string;
   end: string;
   stops?: string[];
-  transport?: string;
-  budget?: string;
-  startDateTime?: string; // "YYYY-MM-DDTHH:mm"
+  transport: string;
+  budget: string;
+  startDateTime?: string;
   endDateTime?: string;
-  status?: "planned" | "ongoing" | "completed";
+  status: "planned" | "started" | "completed";
   createdAt?: any;
+
+  // optional enhancements
+  notesPre?: string;
+  notesDuring?: string;
+  notesPost?: string;
+
+  mediaPlan?: {
+    photos?: string;
+    videos?: string;
+  };
+
+  updates?: RideUpdate[];
 };
 
-function pad2(n: number) {
+function pad(n: number) {
   return String(n).padStart(2, "0");
 }
 
-// Converts "2026-02-03T17:40" (local) -> "20260203T121000Z" (UTC)
-// If empty, returns empty string.
-function toICSDateTime(dtLocal?: string) {
+// Convert "YYYY-MM-DDTHH:mm" (from datetime-local) to ICS-friendly UTC-ish format
+function toIcsDate(dtLocal?: string) {
   if (!dtLocal) return "";
-  const d = new Date(dtLocal);
-  if (Number.isNaN(d.getTime())) return "";
-  return (
-    d.getUTCFullYear() +
-    pad2(d.getUTCMonth() + 1) +
-    pad2(d.getUTCDate()) +
-    "T" +
-    pad2(d.getUTCHours()) +
-    pad2(d.getUTCMinutes()) +
-    pad2(d.getUTCSeconds()) +
-    "Z"
-  );
+  // If user provides local datetime, keep it as "floating time" without Z.
+  // Many calendars interpret it in user's timezone.
+  const [date, time] = dtLocal.split("T");
+  if (!date || !time) return "";
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  return `${y}${pad(m)}${pad(d)}T${pad(hh)}${pad(mm)}00`;
 }
 
-function escapeICS(s: string) {
-  return s
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;");
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export default function RideDetailPage() {
-  const { id } = useParams<{ id: string }>();
   const r = useRouter();
+  const params = useParams<{ id: string }>();
+  const rideId = params?.id;
 
   const [uid, setUid] = useState<string | null>(null);
   const [ride, setRide] = useState<Ride | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Auth
-  useEffect(() => {
-    return onAuthStateChanged(auth, (u) => setUid(u ? u.uid : null));
-  }, []);
+  // editable fields
+  const [notesPre, setNotesPre] = useState("");
+  const [notesDuring, setNotesDuring] = useState("");
+  const [notesPost, setNotesPost] = useState("");
+  const [photosPlan, setPhotosPlan] = useState("");
+  const [videosPlan, setVideosPlan] = useState("");
+  const [newUpdate, setNewUpdate] = useState("");
 
-  // Ride doc listener
-  useEffect(() => {
-    if (!id) return;
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u ? u.uid : null)), []);
 
+  useEffect(() => {
+    if (!rideId) return;
     setLoading(true);
     setErr(null);
 
-    const ref = doc(db, "rides", String(id));
+    const ref = doc(db, "rides", String(rideId));
     const unsub = onSnapshot(
       ref,
       (snap) => {
+        setLoading(false);
         if (!snap.exists()) {
           setRide(null);
-          setLoading(false);
+          setErr("Ride not found.");
           return;
         }
-        setRide(snap.data() as Ride);
-        setLoading(false);
+        const data = snap.data() as any;
+        const next: Ride = { ...(data as Ride) };
+        setRide(next);
+
+        setNotesPre(next.notesPre || "");
+        setNotesDuring(next.notesDuring || "");
+        setNotesPost(next.notesPost || "");
+        setPhotosPlan(next.mediaPlan?.photos || "");
+        setVideosPlan(next.mediaPlan?.videos || "");
       },
       (e) => {
-        setErr(e?.message ?? "Failed to load ride");
         setLoading(false);
+        setErr(e?.message || "Failed to load ride.");
       }
     );
 
     return () => unsub();
-  }, [id]);
+  }, [rideId]);
 
-  const isOwner = !!uid && !!ride?.uid && uid === ride.uid;
+  const isOwner = useMemo(() => {
+    if (!ride || !uid) return false;
+    return ride.uid === uid;
+  }, [ride, uid]);
 
-  const icsText = useMemo(() => {
+  const routeLine = useMemo(() => {
     if (!ride) return "";
+    const stops = (ride.stops || []).filter(Boolean);
+    const full = [ride.start, ...stops, ride.end].filter(Boolean);
+    return full.join(" → ");
+  }, [ride]);
 
-    const title = ride.title || "Ride Plan";
-    const location = [ride.start, ...(ride.stops ?? []), ride.end]
-      .filter(Boolean)
-      .join(" → ");
+  async function saveExtras() {
+    setErr(null);
+    if (!rideId) return;
+    if (!uid) return setErr("Please login first.");
+    if (!ride) return setErr("Ride not found.");
+    if (!isOwner) return setErr("You do not have access to edit this ride.");
 
-    const descLines = [
-      `Transport: ${ride.transport ?? "-"}`,
-      `Budget: ${ride.budget ?? "-"}`,
-      `Status: ${ride.status ?? "planned"}`,
-      "",
-      "Route:",
-      location,
-    ];
+    try {
+      const ref = doc(db, "rides", String(rideId));
+      await updateDoc(ref, {
+        notesPre: notesPre || "",
+        notesDuring: notesDuring || "",
+        notesPost: notesPost || "",
+        mediaPlan: {
+          photos: photosPlan || "",
+          videos: videosPlan || "",
+        },
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e: any) {
+      setErr(e?.message || "Failed to save.");
+    }
+  }
 
-    const dtStart = toICSDateTime(ride.startDateTime);
-    const dtEnd = toICSDateTime(ride.endDateTime);
+  async function setStatus(status: Ride["status"]) {
+    setErr(null);
+    if (!rideId) return;
+    if (!uid) return setErr("Please login first.");
+    if (!ride) return setErr("Ride not found.");
+    if (!isOwner) return setErr("You do not have access to edit this ride.");
 
-    // If no start/end datetime, create an all-day event fallback (today)
-    // (ICS needs either DTSTART/DTEND or DTSTART; we keep it simple)
+    try {
+      const ref = doc(db, "rides", String(rideId));
+      await updateDoc(ref, { status, updatedAt: serverTimestamp() });
+    } catch (e: any) {
+      setErr(e?.message || "Failed to update status.");
+    }
+  }
+
+  async function addUpdate() {
+    setErr(null);
+    if (!rideId) return;
+    if (!uid) return setErr("Please login first.");
+    if (!ride) return setErr("Ride not found.");
+    if (!isOwner) return setErr("You do not have access to edit this ride.");
+    const text = newUpdate.trim();
+    if (!text) return;
+
+    try {
+      const ref = doc(db, "rides", String(rideId));
+      await updateDoc(ref, {
+        updates: arrayUnion({
+          text,
+          at: serverTimestamp(),
+        }),
+        updatedAt: serverTimestamp(),
+      });
+      setNewUpdate("");
+    } catch (e: any) {
+      setErr(e?.message || "Failed to add update.");
+    }
+  }
+
+  function downloadICS() {
+    if (!ride) return;
+
+    const dtStart = toIcsDate(ride.startDateTime);
+    const dtEnd = toIcsDate(ride.endDateTime);
+
+    const uidStr = `xbhp-${rideId}@local`;
     const now = new Date();
-    const y = now.getFullYear();
-    const m = pad2(now.getMonth() + 1);
-    const d = pad2(now.getDate());
-    const fallbackAllDay = `${y}${m}${d}`;
-
-    const uidStr = `${String(id)}@xbhp.local`;
+    const dtStamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(
+      now.getUTCDate()
+    )}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(
+      now.getUTCSeconds()
+    )}Z`;
 
     const lines = [
       "BEGIN:VCALENDAR",
@@ -138,70 +223,26 @@ export default function RideDetailPage() {
       "METHOD:PUBLISH",
       "BEGIN:VEVENT",
       `UID:${uidStr}`,
-      `SUMMARY:${escapeICS(title)}`,
-      `LOCATION:${escapeICS(location)}`,
-      `DESCRIPTION:${escapeICS(descLines.join("\n"))}`,
-      dtStart ? `DTSTART:${dtStart}` : `DTSTART;VALUE=DATE:${fallbackAllDay}`,
-      dtEnd ? `DTEND:${dtEnd}` : undefined,
+      `DTSTAMP:${dtStamp}`,
+      `SUMMARY:${(ride.title || "xBhp Ride").replace(/\n/g, " ")}`,
+      `DESCRIPTION:${(routeLine || "").replace(/\n/g, " ")}`,
+      `LOCATION:${(ride.start || "").replace(/\n/g, " ")}`,
+      dtStart ? `DTSTART:${dtStart}` : "",
+      dtEnd ? `DTEND:${dtEnd}` : "",
       "END:VEVENT",
       "END:VCALENDAR",
-    ].filter(Boolean) as string[];
+    ].filter(Boolean);
 
-    return lines.join("\r\n");
-  }, [ride, id]);
-
-  function downloadICS() {
-    if (!icsText) return;
-    const blob = new Blob([icsText], { type: "text/calendar;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(ride?.title || "ride-plan").replace(/\s+/g, "-")}.ics`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    downloadTextFile(`xBhp-ride-${rideId}.ics`, lines.join("\r\n"));
   }
 
-  async function setStatus(status: "planned" | "ongoing" | "completed") {
-    if (!id) return;
-    setErr(null);
-    if (!isOwner) return setErr("Not allowed.");
-    setBusy(true);
-    try {
-      await updateDoc(doc(db, "rides", String(id)), { status });
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to update status");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function removeRide() {
-    if (!id) return;
-    setErr(null);
-    if (!isOwner) return setErr("Not allowed.");
-
-    const ok = confirm("Delete this ride plan permanently?");
-    if (!ok) return;
-
-    setBusy(true);
-    try {
-      await deleteDoc(doc(db, "rides", String(id)));
-      r.push("/rides");
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to delete ride");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // If user not logged in
   if (!uid) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
-        <h1>Ride Details</h1>
-        <p>Please <a href="/login">login</a>.</p>
+        <h1>Ride Detail</h1>
+        <p>
+          Please <a href="/login">login</a>.
+        </p>
       </main>
     );
   }
@@ -209,7 +250,7 @@ export default function RideDetailPage() {
   if (loading) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
-        <p>Loading...</p>
+        <p>Loading…</p>
       </main>
     );
   }
@@ -217,91 +258,144 @@ export default function RideDetailPage() {
   if (!ride) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
-        <h1>Ride not found</h1>
-        <p><a href="/rides">Back to My Rides</a></p>
+        <h1>Ride Detail</h1>
+        <p>{err || "Ride not found."}</p>
+        <p>
+          <a href="/rides">← Back to rides</a>
+        </p>
       </main>
     );
   }
 
-  // Logged in but not owner
   if (!isOwner) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
-        <h1>Not allowed</h1>
-        <p>This ride plan belongs to another user.</p>
-        <p><a href="/rides">Back to My Rides</a></p>
+        <h1>{ride.title}</h1>
+        <p style={{ color: "crimson" }}>You don’t have access to this ride.</p>
+        <p>
+          <a href="/rides">← Back to rides</a>
+        </p>
       </main>
     );
   }
 
-  const routeLine = [ride.start, ...(ride.stops ?? []), ride.end].filter(Boolean).join(" → ");
-
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 900, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-        <div>
-          <h1 style={{ margin: 0 }}>{ride.title}</h1>
-          <div style={{ opacity: 0.8, marginTop: 6 }}>{routeLine}</div>
-        </div>
+    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 980, margin: "0 auto" }}>
+      <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
+        <a href="/rides">← Back</a>
+        <a href="/feed">Feed</a>
+      </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <a href="/rides">← Back</a>
-          <a href="/rides/new">+ New</a>
-          <button onClick={downloadICS} disabled={busy} style={{ padding: "8px 10px" }}>
-            Export Calendar (.ics)
-          </button>
+      <h1 style={{ marginBottom: 6 }}>{ride.title}</h1>
+
+      <div style={{ opacity: 0.85, marginBottom: 12 }}>
+        <div><strong>Route:</strong> {routeLine}</div>
+        <div style={{ fontSize: 13 }}>
+          {(ride.transport || "").toUpperCase()} • {(ride.budget || "").toUpperCase()} •{" "}
+          <strong>Status:</strong> {(ride.status || "planned").toUpperCase()}
+        </div>
+        <div style={{ fontSize: 13, marginTop: 4 }}>
+          <strong>Dates:</strong>{" "}
+          {ride.startDateTime ? ride.startDateTime : "—"}{" "}
+          →{" "}
+          {ride.endDateTime ? ride.endDateTime : "—"}
         </div>
       </div>
 
-      <div style={{ marginTop: 18, border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <span><b>Transport:</b> {(ride.transport ?? "-").toUpperCase()}</span>
-          <span><b>Budget:</b> {(ride.budget ?? "-").toUpperCase()}</span>
-          <span><b>Status:</b> {(ride.status ?? "planned").toUpperCase()}</span>
-        </div>
-
-        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div>
-            <div style={{ fontWeight: 600 }}>Start date & time</div>
-            <div style={{ opacity: 0.85 }}>{ride.startDateTime || "-"}</div>
-          </div>
-          <div>
-            <div style={{ fontWeight: 600 }}>End date & time</div>
-            <div style={{ opacity: 0.85 }}>{ride.endDateTime || "-"}</div>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Stops</div>
-          {(ride.stops?.length ?? 0) === 0 ? (
-            <div style={{ opacity: 0.85 }}>No stops</div>
-          ) : (
-            <ol style={{ margin: 0, paddingLeft: 18 }}>
-              {(ride.stops ?? []).map((s, i) => <li key={i}>{s}</li>)}
-            </ol>
-          )}
-        </div>
-      </div>
-
-      <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button onClick={() => setStatus("planned")} disabled={busy} style={{ padding: "10px 12px" }}>
-          Mark Planned
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+        <button onClick={() => setStatus("started")} style={{ padding: "10px 12px" }}>
+          Mark Started
         </button>
-        <button onClick={() => setStatus("ongoing")} disabled={busy} style={{ padding: "10px 12px" }}>
-          Mark Ongoing
-        </button>
-        <button onClick={() => setStatus("completed")} disabled={busy} style={{ padding: "10px 12px" }}>
+        <button onClick={() => setStatus("completed")} style={{ padding: "10px 12px" }}>
           Mark Completed
         </button>
-
-        <div style={{ flex: 1 }} />
-
-        <button onClick={removeRide} disabled={busy} style={{ padding: "10px 12px" }}>
-          Delete Ride
+        <button onClick={downloadICS} style={{ padding: "10px 12px" }}>
+          Download Calendar (.ics)
+        </button>
+        <button onClick={saveExtras} style={{ padding: "10px 12px" }}>
+          Save Notes / Media Plan
         </button>
       </div>
 
-      {err && <p style={{ color: "crimson", marginTop: 12 }}>{err}</p>}
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
+
+      <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
+          <h2 style={{ marginTop: 0 }}>Notes</h2>
+
+          <label style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            <div style={{ fontWeight: 600 }}>Pre-ride</div>
+            <textarea value={notesPre} onChange={(e) => setNotesPre(e.target.value)} rows={4} style={{ padding: 10 }} />
+          </label>
+
+          <label style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            <div style={{ fontWeight: 600 }}>During ride</div>
+            <textarea value={notesDuring} onChange={(e) => setNotesDuring(e.target.value)} rows={4} style={{ padding: 10 }} />
+          </label>
+
+          <label style={{ display: "grid", gap: 6 }}>
+            <div style={{ fontWeight: 600 }}>Post-ride</div>
+            <textarea value={notesPost} onChange={(e) => setNotesPost(e.target.value)} rows={4} style={{ padding: 10 }} />
+          </label>
+        </div>
+
+        <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
+          <h2 style={{ marginTop: 0 }}>Media Plan (what you intend to capture)</h2>
+
+          <label style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+            <div style={{ fontWeight: 600 }}>Photos list</div>
+            <textarea
+              value={photosPlan}
+              onChange={(e) => setPhotosPlan(e.target.value)}
+              rows={6}
+              placeholder={"Example:\n- Departure shot\n- Road signs\n- Sunset timelapse\n- Landmark portrait"}
+              style={{ padding: 10 }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: 6 }}>
+            <div style={{ fontWeight: 600 }}>Videos list</div>
+            <textarea
+              value={videosPlan}
+              onChange={(e) => setVideosPlan(e.target.value)}
+              rows={6}
+              placeholder={"Example:\n- Bike start-up sound\n- POV ride segments\n- Drone clip\n- Arrival vibe"}
+              style={{ padding: 10 }}
+            />
+          </label>
+        </div>
+      </section>
+
+      <section style={{ marginTop: 14, border: "1px solid #ddd", borderRadius: 12, padding: 14 }}>
+        <h2 style={{ marginTop: 0 }}>Ride Updates (timeline notes)</h2>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+          <input
+            value={newUpdate}
+            onChange={(e) => setNewUpdate(e.target.value)}
+            placeholder="Add a quick update… (e.g., Reached Manali at 3pm, snow starts)"
+            style={{ flex: 1, minWidth: 280, padding: 10 }}
+          />
+          <button onClick={addUpdate} style={{ padding: "10px 12px" }}>
+            Add Update
+          </button>
+        </div>
+
+        {!ride.updates || ride.updates.length === 0 ? (
+          <p style={{ opacity: 0.8 }}>No updates yet.</p>
+        ) : (
+          <div style={{ display: "grid", gap: 8 }}>
+            {[...ride.updates].slice().reverse().map((u, idx) => (
+              <div key={idx} style={{ padding: 10, border: "1px solid #eee", borderRadius: 10 }}>
+                <div style={{ fontSize: 13, opacity: 0.75 }}>
+                  {u.at?.toDate ? u.at.toDate().toLocaleString() : "Just now"}
+                </div>
+                <div>{u.text}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </main>
   );
 }
