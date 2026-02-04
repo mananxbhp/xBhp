@@ -28,7 +28,17 @@ type Ride = {
   endDateTime?: string;
   status?: "planned" | "ongoing" | "completed" | "cancelled";
 };
-
+type ContentItem = {
+  id: string;
+  uid: string;
+  kind: "photo" | "video" | "blog";
+  title: string;
+  url?: string;
+  caption?: string;
+  body?: string;
+  createdAt?: any;
+  updatedAt?: any;
+};
 function normalizeDtLocal(value?: string) {
   // stored as "YYYY-MM-DDTHH:mm" from <input type="datetime-local">
   return value || "";
@@ -58,7 +68,17 @@ export default function RideDetailPage() {
   const [status, setStatus] = useState<"planned" | "ongoing" | "completed" | "cancelled">("planned");
   const [startDateTime, setStartDateTime] = useState("");
   const [endDateTime, setEndDateTime] = useState("");
+const [content, setContent] = useState<ContentItem[]>([]);
+const [contentErr, setContentErr] = useState<string | null>(null);
 
+const [isAdding, setIsAdding] = useState(false);
+const [editing, setEditing] = useState<ContentItem | null>(null);
+
+const [cKind, setCKind] = useState<ContentItem["kind"]>("photo");
+const [cTitle, setCTitle] = useState("");
+const [cUrl, setCUrl] = useState("");
+const [cCaption, setCCaption] = useState("");
+const [cBody, setCBody] = useState("");
   useEffect(() => onAuthStateChanged(auth, (u) => setUid(u ? u.uid : null)), []);
 
   useEffect(() => {
@@ -98,19 +118,222 @@ export default function RideDetailPage() {
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, id, isEditing]);
+useEffect(() => {
+  if (!uid || !id) return;
 
+  const ref = collection(db, "rides", String(id), "content");
+  const q2 = query(ref, orderBy("createdAt", "desc"));
+
+  const unsub = onSnapshot(
+    q2,
+    (snap) => {
+      setContentErr(null);
+      setContent(
+        snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }))
+      );
+    },
+    (e) => setContentErr(e?.message ?? "Failed to load content")
+  );
+
+  return () => unsub();
+}, [uid, id]);
   const canRender = useMemo(() => uid && id, [uid, id]);
 
   function updateStop(i: number, value: string) {
     setStops((prev) => prev.map((x, idx) => (idx === i ? value : x)));
   }
+  function resetContentForm() {
+  setCKind("photo");
+  setCTitle("");
+  setCUrl("");
+  setCCaption("");
+  setCBody("");
+  setIsAdding(false);
+  setEditing(null);
+}
+
+function startAddContent() {
+  resetContentForm();
+  setIsAdding(true);
+}
+
+function startEditContent(x: ContentItem) {
+  setEditing(x);
+  setIsAdding(false);
+  setCKind(x.kind);
+  setCTitle(x.title ?? "");
+  setCUrl(x.url ?? "");
+  setCCaption(x.caption ?? "");
+  setCBody(x.body ?? "");
+}
+
+async function saveContent() {
+  if (!uid || !id) return;
+
+  if (!cTitle.trim()) return setContentErr("Title is required.");
+  if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
+    return setContentErr("URL is required for Photo/Video.");
+
+  setContentErr(null);
+
+  const payload: any = {
+    uid,
+    kind: cKind,
+    title: cTitle.trim(),
+    caption: cCaption.trim(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cKind === "blog") payload.body = cBody || "";
+  else payload.url = cUrl.trim();
+
+  if (editing) {
+    await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
+  } else {
+    payload.createdAt = serverTimestamp();
+    await addDoc(collection(db, "rides", String(id), "content"), payload);
+  }
+
+  resetContentForm();
+}
+
+async function deleteContent(x: ContentItem) {
+  if (!id) return;
+  const ok = confirm("Delete this content item?");
+  if (!ok) return;
+  await deleteDoc(doc(db, "rides", String(id), "content", x.id));
+}
   function addStop() {
     setStops((prev) => [...prev, ""]);
   }
+  function resetContentForm() {
+  setCKind("photo");
+  setCTitle("");
+  setCUrl("");
+  setCCaption("");
+  setCBody("");
+  setIsAdding(false);
+  setEditing(null);
+}
+
+function startAddContent() {
+  resetContentForm();
+  setIsAdding(true);
+}
+
+function startEditContent(x: ContentItem) {
+  setEditing(x);
+  setIsAdding(false);
+  setCKind(x.kind);
+  setCTitle(x.title ?? "");
+  setCUrl(x.url ?? "");
+  setCCaption(x.caption ?? "");
+  setCBody(x.body ?? "");
+}
+
+async function saveContent() {
+  if (!uid || !id) return;
+
+  if (!cTitle.trim()) return setContentErr("Title is required.");
+  if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
+    return setContentErr("URL is required for Photo/Video.");
+
+  setContentErr(null);
+
+  const payload: any = {
+    uid,
+    kind: cKind,
+    title: cTitle.trim(),
+    caption: cCaption.trim(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cKind === "blog") payload.body = cBody || "";
+  else payload.url = cUrl.trim();
+
+  if (editing) {
+    await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
+  } else {
+    payload.createdAt = serverTimestamp();
+    await addDoc(collection(db, "rides", String(id), "content"), payload);
+  }
+
+  resetContentForm();
+}
+
+async function deleteContent(x: ContentItem) {
+  if (!id) return;
+  const ok = confirm("Delete this content item?");
+  if (!ok) return;
+  await deleteDoc(doc(db, "rides", String(id), "content", x.id));
+}
   function removeStop(i: number) {
     setStops((prev) => prev.filter((_, idx) => idx !== i));
   }
+function resetContentForm() {
+  setCKind("photo");
+  setCTitle("");
+  setCUrl("");
+  setCCaption("");
+  setCBody("");
+  setIsAdding(false);
+  setEditing(null);
+}
 
+function startAddContent() {
+  resetContentForm();
+  setIsAdding(true);
+}
+
+function startEditContent(x: ContentItem) {
+  setEditing(x);
+  setIsAdding(false);
+  setCKind(x.kind);
+  setCTitle(x.title ?? "");
+  setCUrl(x.url ?? "");
+  setCCaption(x.caption ?? "");
+  setCBody(x.body ?? "");
+}
+
+async function saveContent() {
+  if (!uid || !id) return;
+
+  if (!cTitle.trim()) return setContentErr("Title is required.");
+  if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
+    return setContentErr("URL is required for Photo/Video.");
+
+  setContentErr(null);
+
+  const payload: any = {
+    uid,
+    kind: cKind,
+    title: cTitle.trim(),
+    caption: cCaption.trim(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cKind === "blog") payload.body = cBody || "";
+  else payload.url = cUrl.trim();
+
+  if (editing) {
+    await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
+  } else {
+    payload.createdAt = serverTimestamp();
+    await addDoc(collection(db, "rides", String(id), "content"), payload);
+  }
+
+  resetContentForm();
+}
+
+async function deleteContent(x: ContentItem) {
+  if (!id) return;
+  const ok = confirm("Delete this content item?");
+  if (!ok) return;
+  await deleteDoc(doc(db, "rides", String(id), "content", x.id));
+}
   function startEditing() {
     if (!ride) return;
     setSaveMsg(null);
@@ -165,7 +388,67 @@ export default function RideDetailPage() {
       setSaving(false);
     }
   }
+function resetContentForm() {
+  setCKind("photo");
+  setCTitle("");
+  setCUrl("");
+  setCCaption("");
+  setCBody("");
+  setIsAdding(false);
+  setEditing(null);
+}
 
+function startAddContent() {
+  resetContentForm();
+  setIsAdding(true);
+}
+
+function startEditContent(x: ContentItem) {
+  setEditing(x);
+  setIsAdding(false);
+  setCKind(x.kind);
+  setCTitle(x.title ?? "");
+  setCUrl(x.url ?? "");
+  setCCaption(x.caption ?? "");
+  setCBody(x.body ?? "");
+}
+
+async function saveContent() {
+  if (!uid || !id) return;
+
+  if (!cTitle.trim()) return setContentErr("Title is required.");
+  if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
+    return setContentErr("URL is required for Photo/Video.");
+
+  setContentErr(null);
+
+  const payload: any = {
+    uid,
+    kind: cKind,
+    title: cTitle.trim(),
+    caption: cCaption.trim(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cKind === "blog") payload.body = cBody || "";
+  else payload.url = cUrl.trim();
+
+  if (editing) {
+    await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
+  } else {
+    payload.createdAt = serverTimestamp();
+    await addDoc(collection(db, "rides", String(id), "content"), payload);
+  }
+
+  resetContentForm();
+}
+
+async function deleteContent(x: ContentItem) {
+  if (!id) return;
+  const ok = confirm("Delete this content item?");
+  if (!ok) return;
+  await deleteDoc(doc(db, "rides", String(id), "content", x.id));
+}
   async function removeRide() {
     if (!id) return;
     const ok = confirm("Delete this ride plan?");
@@ -174,7 +457,67 @@ export default function RideDetailPage() {
     await deleteDoc(doc(db, "rides", String(id)));
     r.push("/rides");
   }
+function resetContentForm() {
+  setCKind("photo");
+  setCTitle("");
+  setCUrl("");
+  setCCaption("");
+  setCBody("");
+  setIsAdding(false);
+  setEditing(null);
+}
 
+function startAddContent() {
+  resetContentForm();
+  setIsAdding(true);
+}
+
+function startEditContent(x: ContentItem) {
+  setEditing(x);
+  setIsAdding(false);
+  setCKind(x.kind);
+  setCTitle(x.title ?? "");
+  setCUrl(x.url ?? "");
+  setCCaption(x.caption ?? "");
+  setCBody(x.body ?? "");
+}
+
+async function saveContent() {
+  if (!uid || !id) return;
+
+  if (!cTitle.trim()) return setContentErr("Title is required.");
+  if ((cKind === "photo" || cKind === "video") && !cUrl.trim())
+    return setContentErr("URL is required for Photo/Video.");
+
+  setContentErr(null);
+
+  const payload: any = {
+    uid,
+    kind: cKind,
+    title: cTitle.trim(),
+    caption: cCaption.trim(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cKind === "blog") payload.body = cBody || "";
+  else payload.url = cUrl.trim();
+
+  if (editing) {
+    await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
+  } else {
+    payload.createdAt = serverTimestamp();
+    await addDoc(collection(db, "rides", String(id), "content"), payload);
+  }
+
+  resetContentForm();
+}
+
+async function deleteContent(x: ContentItem) {
+  if (!id) return;
+  const ok = confirm("Delete this content item?");
+  if (!ok) return;
+  await deleteDoc(doc(db, "rides", String(id), "content", x.id));
+}
   if (!uid) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
@@ -353,7 +696,97 @@ export default function RideDetailPage() {
           </div>
         </div>
       )}
+<div style={{ marginTop: 18 }}>
+  <h2 style={{ marginBottom: 8 }}>Ride Content</h2>
 
+  <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+    <button onClick={startAddContent} style={{ padding: "10px 12px" }}>
+      + Add Photo / Video / Blog
+    </button>
+  </div>
+
+  {contentErr && <p style={{ color: "crimson" }}>{contentErr}</p>}
+
+  {(isAdding || editing) && (
+    <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <strong>{editing ? "Edit Content" : "Add Content"}</strong>
+        <button onClick={resetContentForm} style={{ padding: "8px 10px" }}>Close</button>
+      </div>
+
+      <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+        <label>
+          Type
+          <select value={cKind} onChange={(e) => setCKind(e.target.value as any)} style={{ width: "100%", padding: 10 }}>
+            <option value="photo">Photo (link)</option>
+            <option value="video">Video (link)</option>
+            <option value="blog">Blog (text)</option>
+          </select>
+        </label>
+
+        <label>
+          Title
+          <input value={cTitle} onChange={(e) => setCTitle(e.target.value)} style={{ width: "100%", padding: 10 }} />
+        </label>
+
+        {(cKind === "photo" || cKind === "video") && (
+          <label>
+            URL
+            <input value={cUrl} onChange={(e) => setCUrl(e.target.value)} placeholder="Paste link (YouTube/Instagram/Drive etc.)" style={{ width: "100%", padding: 10 }} />
+          </label>
+        )}
+
+        <label>
+          Caption (optional)
+          <input value={cCaption} onChange={(e) => setCCaption(e.target.value)} style={{ width: "100%", padding: 10 }} />
+        </label>
+
+        {cKind === "blog" && (
+          <label>
+            Blog Text
+            <textarea value={cBody} onChange={(e) => setCBody(e.target.value)} rows={8} style={{ width: "100%", padding: 10 }} />
+          </label>
+        )}
+
+        <button onClick={saveContent} style={{ padding: 12 }}>
+          {editing ? "Save Changes" : "Add Content"}
+        </button>
+      </div>
+    </div>
+  )}
+
+  {content.length === 0 ? (
+    <p>No content yet. Add your first photo/video/blog.</p>
+  ) : (
+    <div style={{ display: "grid", gap: 12 }}>
+      {content.map((x) => (
+        <div key={x.id} style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <div>
+              <strong>{x.title}</strong>
+              <div style={{ opacity: 0.7, fontSize: 13 }}>{x.kind.toUpperCase()}</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => startEditContent(x)} style={{ padding: "8px 10px" }}>Edit</button>
+              <button onClick={() => deleteContent(x)} style={{ padding: "8px 10px" }}>Delete</button>
+            </div>
+          </div>
+
+          {x.caption && <p style={{ marginTop: 10 }}>{x.caption}</p>}
+
+          {x.kind === "blog" ? (
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 10, fontFamily: "inherit" }}>{x.body || ""}</pre>
+          ) : (
+            <p style={{ marginTop: 10 }}>
+              <a href={x.url} target="_blank" rel="noreferrer">{x.url}</a>
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  )}
+</div>
       <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
         <button onClick={removeRide} style={{ padding: "10px 12px" }}>
           Delete
