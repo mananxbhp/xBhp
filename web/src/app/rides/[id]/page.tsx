@@ -2,7 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, onSnapshot, deleteDoc, updateDoc } from "firebase/firestore";
+import {
+  doc,
+  onSnapshot,
+  deleteDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  serverTimestamp,
+  orderBy,
+  query,
+} from "firebase/firestore";
 import { auth, db } from "@/lib/firebaseClient";
 import { useParams, useRouter } from "next/navigation";
 
