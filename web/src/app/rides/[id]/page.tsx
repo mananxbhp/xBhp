@@ -56,11 +56,12 @@ export default function RideDetailPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  const [isEditing, setIsEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Ride editing state
+  const [isEditingRide, setIsEditingRide] = useState(false);
+  const [rideSaving, setRideSaving] = useState(false);
+  const [rideMsg, setRideMsg] = useState<string | null>(null);
 
-  // ride form state
+  // Ride form state
   const [title, setTitle] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -71,9 +72,11 @@ export default function RideDetailPage() {
   const [startDateTime, setStartDateTime] = useState("");
   const [endDateTime, setEndDateTime] = useState("");
 
-  // content state
+  // Content state
   const [content, setContent] = useState<ContentItem[]>([]);
   const [contentErr, setContentErr] = useState<string | null>(null);
+  const [contentMsg, setContentMsg] = useState<string | null>(null);
+  const [contentSaving, setContentSaving] = useState(false);
 
   const [isAdding, setIsAdding] = useState(false);
   const [editing, setEditing] = useState<ContentItem | null>(null);
@@ -103,8 +106,8 @@ export default function RideDetailPage() {
         setErr(null);
         setRide(data);
 
-        // keep form in sync only when NOT editing
-        if (!isEditing) {
+        // keep form in sync only when NOT editing ride
+        if (!isEditingRide) {
           setTitle(data.title ?? "");
           setStart(data.start ?? "");
           setEnd(data.end ?? "");
@@ -124,16 +127,13 @@ export default function RideDetailPage() {
 
     return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uid, id, isEditing]);
+  }, [uid, id, isEditingRide]);
 
   // content listener
   useEffect(() => {
     if (!uid || !id) return;
 
-    const q2 = query(
-      collection(db, "rides", String(id), "content"),
-      orderBy("createdAt", "desc")
-    );
+    const q2 = query(collection(db, "rides", String(id), "content"), orderBy("createdAt", "desc"));
 
     const unsub = onSnapshot(
       q2,
@@ -154,6 +154,7 @@ export default function RideDetailPage() {
 
   const canRender = useMemo(() => uid && id, [uid, id]);
 
+  // ride helpers
   function updateStop(i: number, value: string) {
     setStops((prev) => prev.map((x, idx) => (idx === i ? value : x)));
   }
@@ -166,8 +167,8 @@ export default function RideDetailPage() {
 
   function startEditingRide() {
     if (!ride) return;
-    setSaveMsg(null);
-    setIsEditing(true);
+    setRideMsg(null);
+    setIsEditingRide(true);
 
     // ensure form is loaded from latest ride
     setTitle(ride.title ?? "");
@@ -182,19 +183,19 @@ export default function RideDetailPage() {
   }
 
   function cancelEditingRide() {
-    setIsEditing(false);
-    setSaveMsg(null);
+    setIsEditingRide(false);
+    setRideMsg(null);
   }
 
   async function saveEditsRide() {
     if (!uid || !id) return;
-    setSaveMsg(null);
+    setRideMsg(null);
     setErr(null);
 
     if (!title.trim()) return setErr("Title is required.");
     if (!start.trim() || !end.trim()) return setErr("Start and End are required.");
 
-    setSaving(true);
+    setRideSaving(true);
     try {
       const cleanStops = stops.map((s) => s.trim()).filter(Boolean);
 
@@ -210,12 +211,12 @@ export default function RideDetailPage() {
         endDateTime: endDateTime || "",
       });
 
-      setIsEditing(false);
-      setSaveMsg("Saved ✅");
+      setIsEditingRide(false);
+      setRideMsg("Saved ✅");
     } catch (e: any) {
       setErr(e?.message ?? "Failed to save");
     } finally {
-      setSaving(false);
+      setRideSaving(false);
     }
   }
 
@@ -242,6 +243,7 @@ export default function RideDetailPage() {
 
   function startAddContent() {
     resetContentForm();
+    setContentMsg(null);
     setIsAdding(true);
   }
 
@@ -254,19 +256,25 @@ export default function RideDetailPage() {
     setCCaption(x.caption ?? "");
     setCBody(x.body ?? "");
     setContentErr(null);
+    setContentMsg(null);
   }
 
   async function saveContent() {
     try {
-      if (!uid || !id) return;
+      if (!uid || !id) {
+        setContentErr("Not logged in / missing ride id.");
+        return;
+      }
 
       if (!cTitle.trim()) return setContentErr("Title is required.");
       if ((cKind === "photo" || cKind === "video") && !cUrl.trim()) return setContentErr("URL is required for Photo/Video.");
 
       setContentErr(null);
+      setContentMsg(null);
+      setContentSaving(true);
 
       const payload: any = {
-        uid,
+        uid, // IMPORTANT for rules
         kind: cKind,
         title: cTitle.trim(),
         caption: cCaption.trim(),
@@ -276,16 +284,23 @@ export default function RideDetailPage() {
       if (cKind === "blog") payload.body = cBody || "";
       else payload.url = cUrl.trim();
 
+      console.log("[saveContent] uid,id,payload", uid, id, payload);
+
       if (editing) {
         await updateDoc(doc(db, "rides", String(id), "content", editing.id), payload);
       } else {
         payload.createdAt = serverTimestamp();
-        await addDoc(collection(db, "rides", String(id), "content"), payload);
+        const ref = await addDoc(collection(db, "rides", String(id), "content"), payload);
+        console.log("[saveContent] created doc:", ref.id);
       }
 
+      setContentMsg("Saved ✅");
       resetContentForm();
     } catch (e: any) {
-      setContentErr(e?.message ?? "Failed to save content");
+      console.error("[saveContent] error", e);
+      setContentErr(e?.message ?? String(e) ?? "Failed to save content");
+    } finally {
+      setContentSaving(false);
     }
   }
 
@@ -295,6 +310,7 @@ export default function RideDetailPage() {
     if (!ok) return;
     try {
       await deleteDoc(doc(db, "rides", String(id), "content", x.id));
+      setContentMsg("Deleted ✅");
     } catch (e: any) {
       setContentErr(e?.message ?? "Failed to delete content");
     }
@@ -346,26 +362,26 @@ export default function RideDetailPage() {
           </div>
         </div>
 
-        {!isEditing ? (
+        {!isEditingRide ? (
           <button onClick={startEditingRide} style={{ padding: "10px 12px" }}>
             Edit
           </button>
         ) : (
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={cancelEditingRide} disabled={saving} style={{ padding: "10px 12px" }}>
+            <button onClick={cancelEditingRide} disabled={rideSaving} style={{ padding: "10px 12px" }}>
               Cancel
             </button>
-            <button onClick={saveEditsRide} disabled={saving} style={{ padding: "10px 12px" }}>
-              {saving ? "Saving…" : "Save"}
+            <button onClick={saveEditsRide} disabled={rideSaving} style={{ padding: "10px 12px" }}>
+              {rideSaving ? "Saving…" : "Save"}
             </button>
           </div>
         )}
       </div>
 
-      {saveMsg && <p style={{ color: "green", marginTop: 0 }}>{saveMsg}</p>}
+      {rideMsg && <p style={{ color: "green", marginTop: 0 }}>{rideMsg}</p>}
       {err && <p style={{ color: "crimson" }}>{err}</p>}
 
-      {!isEditing ? (
+      {!isEditingRide ? (
         <div style={{ display: "grid", gap: 8, border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
           <div>
             <strong>Route:</strong> {ride.start} → {ride.end}
@@ -490,6 +506,7 @@ export default function RideDetailPage() {
         </div>
 
         {contentErr && <p style={{ color: "crimson" }}>{contentErr}</p>}
+        {contentMsg && <p style={{ color: "green" }}>{contentMsg}</p>}
 
         {(isAdding || editing) && (
           <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14, marginBottom: 14 }}>
@@ -539,8 +556,8 @@ export default function RideDetailPage() {
                 </label>
               )}
 
-              <button onClick={saveContent} style={{ padding: 12 }}>
-                {editing ? "Save Changes" : "Add Content"}
+              <button onClick={saveContent} disabled={contentSaving} style={{ padding: 12 }}>
+                {contentSaving ? "Saving…" : editing ? "Save Changes" : "Add Content"}
               </button>
             </div>
           </div>
