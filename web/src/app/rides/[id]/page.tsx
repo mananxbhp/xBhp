@@ -20,7 +20,8 @@ type Ride = {
 };
 
 export default function RideDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const params = useParams();
+  const id = String((params as any)?.id || "");
   const r = useRouter();
 
   const [uid, setUid] = useState<string | null>(null);
@@ -33,7 +34,7 @@ export default function RideDetailPage() {
   useEffect(() => {
     if (!uid || !id) return;
 
-    const ref = doc(db, "rides", String(id));
+    const ref = doc(db, "rides", id);
     const unsub = onSnapshot(
       ref,
       (snap) => {
@@ -41,7 +42,7 @@ export default function RideDetailPage() {
         if (!snap.exists()) return setErr("Ride not found.");
         const data = snap.data() as Ride;
 
-        // Basic client-side protection too (rules already protect server-side)
+        // Client-side check (rules should also protect server-side)
         if (data.uid !== uid) return setErr("Not allowed.");
         setRide(data);
       },
@@ -55,11 +56,10 @@ export default function RideDetailPage() {
   }, [uid, id]);
 
   async function removeRide() {
-    if (!id) return;
     const ok = confirm("Delete this ride plan?");
     if (!ok) return;
 
-    await deleteDoc(doc(db, "rides", String(id)));
+    await deleteDoc(doc(db, "rides", id));
     r.push("/rides");
   }
 
@@ -106,9 +106,7 @@ export default function RideDetailPage() {
         <div><strong>Route:</strong> {ride.start} → {ride.end}</div>
 
         {Array.isArray(ride.stops) && ride.stops.length > 0 && (
-          <div>
-            <strong>Stops:</strong> {ride.stops.join(" → ")}
-          </div>
+          <div><strong>Stops:</strong> {ride.stops.join(" → ")}</div>
         )}
 
         {(ride.startDateTime || ride.endDateTime) && (
